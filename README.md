@@ -2,9 +2,9 @@
 An implementation of a factory controller. this is part of the application for a coles job
 
 yes it is one file - sorry 
-the outpu format could be improved
-
-this finds the best solutions in terms of time to run 
+the output format could be improved
+copes with many ways of building things and finds best in terms of recipe execution time
+ 
 this agrees with the given answer on the example case wi=making 4 electric engins in total 
 the timings might be diffent as I find other solutions
 this copes with orders 
