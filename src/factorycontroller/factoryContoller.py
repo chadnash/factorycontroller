@@ -351,10 +351,13 @@ class FulfillmentPath:
         self.actionsInOrderOfExecuiton = actionsInOrderOfExecuiton
         self.order=order
 
+
     @classmethod
     def fulfillmentPathsOneItemAtATime(cls,order,initialFactory):
         # we should really do this for the same item types
-
+        if len(order.required.itemTypesPresent())>1:
+            print("hi chad we dont completely cope with multipe tpes in our orders. types=" + str(order.required.itemTypesPresent()) )
+            
         factory =  initialFactory
         if(order.mustBeNew):
             factory = Factory(initialFactory.recipes,initialFactory.inventory.withNoItemTypesIn(order.required.itemTypesPresent()))

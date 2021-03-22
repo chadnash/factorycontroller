@@ -1,6 +1,14 @@
 # factorycontroller
 An implementation of a factory controller. this is part of the application for a coles job
 
+this finds the best solutions in terms of time to run 
+this agrees with the given answer on the example case wi=making 4 electric engins in total 
+the timings might be diffent as I find other solutions
+this copes with orders 
+* that must be completely fulfilled or canceled 
+* that do and dont put there constucted items back into the inventory
+* that do and dont always make new items
+
 This is written in Python 3 
 * python was the preferred choice of client
 * python allowed the eaiest packaging and running 
