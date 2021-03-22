@@ -6,25 +6,27 @@
 
 #  I have have considered and rejected some  optimization to sometimes use muteable factories to stop factories being copied too often
 # I have used deep copy just to make sure some my imutables are imutable and implement deepcopy for imutables to return self as an optimization
-import json 
+import json
+import copy
 
 class Recipe:
-    def __init__(self,title,consumes,produces,elapsedSecondsToExecute):
+    def __init__(self,name,title,consumes,produces,elapsedSecondsToExecute):
+        self.name=name
         self.title = title
-        self.consumes  =consumes.copy
-        self.produces  =produces.copy
+        self.consumes  =copy.deepcopy(consumes)
+        self.produces  =copy.deepcopy(produces)
         self.elapsedSecondsToExecute =elapsedSecondsToExecute
     
     @classmethod
-    def fromJsonObj(cls,jsonObj): 
+    def fromJsonObjAndName(cls,name,jsonObj):
         assert  isinstance(jsonObj,dict)
-        cls(jsonObj["title"],
-               ItemTypeQuantities.fromQuantiityByTypeNameDict(jsonObj["consumes"]),
-               ItemTypeQuantities.fromQuantiityByTypeNameDict(jsonObj["produces"]),
+        return cls(name,jsonObj["title"],
+               ItemTypeQuantities.fromQuantityByTypeNameDict(jsonObj["consumes"]),
+               ItemTypeQuantities.fromQuantityByTypeNameDict(jsonObj["produces"]),
                jsonObj["time"])
-    def __deepcopy__(self):
+    def __deepcopy__(self,memo):
         #Recipies are imputable so copy can be itself
-        self
+        return self
 
 class  Recipes:
     def __init__(self,recipies):
@@ -32,63 +34,66 @@ class  Recipes:
 
     @classmethod
     def fromJsonObj(cls,jsonObj):
-        assert  isinstance(jsonObj,list)
-        cls([Recipe.fromJsonObj(recipeDict) for recipeDict in jsonObj])
+        assert  isinstance(jsonObj,dict)
+        recipes = [ ]
+        return cls([Recipe.fromJsonObjAndName(key,jsonObj[key]) for key in jsonObj])
 
-    def __deepcopy__(self):
+    def __deepcopy__(self,memo):
         #Recipies are imputable so copy can be itself
-        self
+        return self
 
 class ItemTypeQuantities:
     def __init__(self, quantByItems = None):
         if(quantByItems is None):
             self.itemQuantityHeldByItemType = {}
         else:
-            self.itemQuantityHeldByItemType =quantByItems.deepCopy() # esure I am imputable
+            self.itemQuantityHeldByItemType =copy.deepcopy(quantByItems)  # ensure I am immutable
         for  k in self.itemQuantityHeldByItemType:
-            assert self.itemQuantityHeldByItemType[k]<0
+            assert self.itemQuantityHeldByItemType[k]>=0
             
     @classmethod
     def fromJsonObj(cls,jsonObj):
-        cls.fromQuantityByTypeNameDict(jsonObj)
+        return cls.fromQuantityByTypeNameDict(jsonObj)
         
     @classmethod
     def fromQuantityByTypeNameDict(cls,quantityByTypeNameDict):        # Yes I know there may be no value in wrapping strings in itemtypes
         quantByItemType = {}
         for (name,quantity) in  quantityByTypeNameDict.items():
-            quantByItemType[ItemType(name)],quantity
-        cls(quantByItemType)
+            quantByItemType[ItemType(name)]=quantity
+        return cls(quantByItemType)
 
 
     def quantityOfItemType(self,itemType):
-         self.itemQuantityHeldByItemTyped.get(itemType,0)
+        return self.itemQuantityHeldByItemTyped.get(itemType,0)
 
     def withOneRemoved(self,itemType):
         quantByItemType = self.itemQuantityHeldByItemType.dee
         assert quantByItemType.get(itemType,None) is not None
         quantByItemType[itemType]= quantByItemType[itemType] -1
-        ItemTypeQuantities(quantByItemType)
+        return ItemTypeQuantities(quantByItemType)
 
     def plus(self,other):
         keys = set()
         keys.addAll(self.itemQuantityHeldByItemType.keys)
         keys.addAll(other.itemQuantityHeldByItemType.keys)
 
-        ItemTypeQuantities({key: self.quantityOfItemType(key)+other.quantityOfItemType(key) for key in keys })
+        return ItemTypeQuantities({key: self.quantityOfItemType(key)+other.quantityOfItemType(key) for key in keys })
 
     def minus(self,other):
         keys = set()
         keys.addAll(self.itemQuantityHeldByItemType.keys.copy)
         keys.addAll(other.itemQuantityHeldByItemType.keys.copy)
 
-        ItemTypeQuantities({key: self.quantityOfItemType(key)-other.quantityOfItemType(key) for key in keys })
+        return ItemTypeQuantities({key: self.quantityOfItemType(key)-other.quantityOfItemType(key) for key in keys })
 
-
+    def __deepcopy__(self,memo):
+        #ItemTypeQuantities are imputable so copy can be itself
+        return self
 
 class ItemType:
     def __init__(self,name):
-        self.name=name.deepCopy
-    def __deepcopy__(self):
+        self.name=name
+    def __deepcopy__(self,memo):
         #ItemType are imputable so copy can be itself
         self
 
@@ -102,13 +107,13 @@ class Factory:
     def deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(self,fulfillmentPath):
         f = self.copy
         delivery = f.excutePathReturnDeliveryOrNone(fulfillmentPath)
-        (delivery,f)
+        return (delivery,f)
             
     def excutePathReturningDeliveryOrNone(self,fulfillmentPath):  # a hack to make factories  change
         delivery = ItemTypeQuantities()
         (delivery,newFactory) = fulfillmentPath.deliveryAndFactoryAfterFulfilmentOrNoneNone(self)
         self.inventory=newFactory.inventory.deepCopy
-        delivery
+        return delivery
 
 
 
@@ -131,19 +136,19 @@ class FufillmentPath:
                 newPath = subPath.followedBy(action)
                 if(not newPath.equivalentForIntialStateIsAlreadyPresentIn(fulfillmentPaths))  :  #an optimization only add non equivalent paths
                     fulfillmentPaths.add(newPath)
-        fulfillmentPaths
+        return fulfillmentPaths
 
     def equivalentForIntialStateIsAlreadyPresentIn(self,fulfillmentPaths,initalFactory):
-        None
+       None
 
     def isEquivalentForIntialState(self,other,initalFactory):
         assert self.canBeSuccessfullyAppliedTo(initalFactory)
         assert other.canBeSuccessfullyAppliedTo(initalFactory)
-        self.delivered == other.delivered and initalFactory.afterFulfillmentOrNoneIfCant(self)==  initalFactory.afterFulfillmentOrNoneInCant(other)
+        return self.delivered == other.delivered and initalFactory.afterFulfillmentOrNoneIfCant(self)==  initalFactory.afterFulfillmentOrNoneInCant(other)
 
     def canBeSuccessfullyAppliedTo(self,factory):
         (d,f) = self.deliveryAndFactoryAfterFulfilmentOrNoneNone(factory)
-        f is not None
+        return f is not None
 
     def deliveryAndFactoryAfterFulfilmentOrNoneNone(self,factory):
         f = factory
@@ -153,7 +158,7 @@ class FufillmentPath:
             if(newDelivery is None):
                 return (None,None)
             delivery=delivery.plus(newDelivery)
-        (delivery,f)
+        return (delivery,f)
 
 
 
@@ -167,7 +172,7 @@ class DeliverAction(Action):
     def deliveryAndFactoryAfterAction(self,factory) :
         delivered = ItemTypeQuantities({self.addItemOfType:1})
         newFactory =  Factory(factory.recipes, factory.inventory.minus(delivered))
-        (delivered ,newFactory )
+        return (delivered ,newFactory )
 
 
 class ExecuteRecipeAction(Action):
@@ -177,15 +182,16 @@ class ExecuteRecipeAction(Action):
     def deliveryAndFactoryAfterAction(self,factory) :
         newInventory=factory.inventory.minus(self.recipeToExecute.consumes).plus(self.recipeToExecute.produces)
         newFactory =  Factory(factory.recipes, newInventory)
-        (ItemTypeQuantities() , newFactory)
+        return (ItemTypeQuantities() , newFactory)
 
 def jsonObjFromString(jsonString):
-    json.loads(jsonString)
+    return  json.loads(jsonString)
+
 
 def jsonObjFromFilePath(filePath):
     with open(filePath, 'r') as json_file:
-        json.load(json_file)
-        
+        return  json.load(json_file)
+
 
 
 def defaultInventory():
@@ -194,7 +200,7 @@ def defaultInventory():
     "iron_plate": 40, "iron_gear": 5, "copper_plate": 20, "copper_cable": 10, "lubricant": 100
     }   
     """
-    ItemTypeQuantities.fromJsonObj(jsonObjFromString(jsonString))
+    return ItemTypeQuantities.fromJsonObj(jsonObj=jsonObjFromString(jsonString))
 
 def defaultRecipies():
     jsonString = """
@@ -238,10 +244,10 @@ def defaultRecipies():
 "electric_engine": 1 }
 } }
     """
-   
-    Recipes.fromJsonObj(jsonObjFromString(jsonString))
+    return  Recipes.fromJsonObj(jsonObjFromString(jsonString))
+
 def defaultOrders():
-    Order.fromStrings(["3x electric_engine","5x electric_circuit", "3x electric_engine"])
+    return Order.fromStrings(["3x electric_engine","5x electric_circuit", "3x electric_engine"])
 
 def test1():
     run()
