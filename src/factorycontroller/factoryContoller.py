@@ -24,6 +24,7 @@ class Recipe:
                ItemTypeQuantities.fromQuantityByTypeNameDict(jsonObj["consumes"]),
                ItemTypeQuantities.fromQuantityByTypeNameDict(jsonObj["produces"]),
                jsonObj["time"])
+
     def __deepcopy__(self,memo):
         #Recipies are imputable so copy can be itself
         return self
@@ -62,12 +63,17 @@ class ItemTypeQuantities:
             quantByItemType[ItemType(name)]=quantity
         return cls(quantByItemType)
 
+    def numberOfItems(self):
+        return sum(self.itemQuantityHeldByItemType.values,0)
 
+    def itemTypesPresent(self):
+        [itemType for itemType in self.itemQuantityHeldByItemType if self.quantityOfItemType(itemType) >0]
+        
     def quantityOfItemType(self,itemType):
         return self.itemQuantityHeldByItemTyped.get(itemType,0)
 
     def withOneRemoved(self,itemType):
-        quantByItemType = self.itemQuantityHeldByItemType.dee
+        quantByItemType = copy.deepcopy(self.itemQuantityHeldByItemType )
         assert quantByItemType.get(itemType,None) is not None
         quantByItemType[itemType]= quantByItemType[itemType] -1
         return ItemTypeQuantities(quantByItemType)
@@ -101,37 +107,73 @@ class ItemType:
 class Factory:
 
     def __init__(self,recipes,inventory):
-        self.recipes=recipes.deepCopy
-        self.inventory= inventory.deepCopy
+        self.recipes=copy.deepcopy(recipes)
+        self.inventory= copy.deepcopy(inventory)
 
     def deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(self,fulfillmentPath):
         f = self.copy
         delivery = f.excutePathReturnDeliveryOrNone(fulfillmentPath)
         return (delivery,f)
-            
+
+    def sizeOfInventory(self):
+        return self.inventory.numberOFItems()
+
     def excutePathReturningDeliveryOrNone(self,fulfillmentPath):  # a hack to make factories  change
         delivery = ItemTypeQuantities()
         (delivery,newFactory) = fulfillmentPath.deliveryAndFactoryAfterFulfilmentOrNoneNone(self)
         self.inventory=newFactory.inventory.deepCopy
         return delivery
 
+    def bestFulfillmentPathForEachOrderInTurn(self,orders):
+        f= self
+        bestFulfillmentPathForEachOrderInTurn=list()
+        for order in orders:
+            best = f.bestFulfillmentPathForOrderOrNone(order);
+            if best is not None:
+                (delivery,f) = f.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(best)
+            bestFulfillmentPathForEachOrderInTurn.append(best)
+        return  bestFulfillmentPathForEachOrderInTurn
 
+    def bestFulfillmentPathForOrderOrNone(self,order):
+        paths = FulfillmentPath.fulfillmentPaths(order,self)
+        best=paths.head
+        for p in paths.tail:
+            (db,fb)=self.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(best)
+            (d,f)=self.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(p)
+            if fb.sizeOfInventory()< f.sizeOfInventory():
+                best=p
+        return best
 
 class Order:
     def __init__(self,required,allowPartialFulfillment):
         self.required = required
-        self.allowPartialFulfillment = True
+        self.allowPartialFulfillment = allowPartialFulfillment
+
+    @classmethod
+    def fromString(cls, orderString):
+        amountXType=orderString.split()
+        assert len(amountXType) == 2
+        amount= int(amountXType[0].lower().replace("x",""))
+        typeName=   amountXType[1]
+        cls(ItemTypeQuantities({typeName:amount}),True)
+
+    @classmethod
+    def fromStrings(cls,orderStrings):
+        return [cls.fromString(s) for s in orderStrings ]
 
 
 
-class FufillmentPath:
+
+class FulfillmentPath:
     def __init__(self,actionsInOrderOfExecuiton):
         self.actionsInOrderOfExecuiton = actionsInOrderOfExecuiton
-    def fulfillmentPaths(self,order,factory):
-        fulfillmentPaths=set()
+
+    @classmethod
+    def fulfillmentPaths(cls,order,factory):
+        fulfillmentPaths=list()
         firstActions = order.allFirstActions(factory)  # maybe we could  avoid deliver actions
         for action in firstActions:
-            subPaths = FufillmentPath.fulfillmentPaths(order.afterAction(action),factory.afterAction(action))
+            subPaths = cls.fulfillmentPaths(order.afterAction(action),factory.afterAction(action))
             for subPath in subPaths:
                 newPath = subPath.followedBy(action)
                 if(not newPath.equivalentForIntialStateIsAlreadyPresentIn(fulfillmentPaths))  :  #an optimization only add non equivalent paths
@@ -139,7 +181,10 @@ class FufillmentPath:
         return fulfillmentPaths
 
     def equivalentForIntialStateIsAlreadyPresentIn(self,fulfillmentPaths,initalFactory):
-       None
+        for p in fulfillmentPaths:
+            if self.isEquivalentForIntialState(p,initalFactory) :
+                return True
+        return False
 
     def isEquivalentForIntialState(self,other,initalFactory):
         assert self.canBeSuccessfullyAppliedTo(initalFactory)
