@@ -48,6 +48,9 @@ class Recipe:
     def canExecuteWithInventory(self,inventory):
         return inventory.subsumes(self.consumes)
 
+    def missingItemTypesThatPreventExecutionAgainstInventory(self,inventory):
+        return self.consumes.itemTypesNotSubsumedBy(inventory)
+
     def producesOneOf(self,itemTypes):
         return self.produces.hasAnyOf(itemTypes)
 
@@ -112,6 +115,7 @@ class ItemTypeQuantities:
             if self.quantityOfItemType(itemType)  < other.quantityOfItemType(itemType) :
                 return False
         return True
+
     def itemTypesNotSubsumedBy(self,other):
         return [itemType for itemType in self.itemTypesPresent() if self.quantityOfItemType(itemType) >  other.quantityOfItemType(itemType)]
 
@@ -182,8 +186,21 @@ class Factory:
     def recipesThatCanExecuteThatCanProduceItemsFrom(self,itemTypes):
         return [r for r in self.recipes if r.canExecuteWithInventory(self.inventory) and r.producesOneOf(set(itemTypes))]
 
+
+    def recipesThatCANTExecuteThatCanProduceItemsFrom(self,itemTypes):
+        return [r for r in self.recipes if (not r.canExecuteWithInventory(self.inventory)) and r.producesOneOf(set(itemTypes))]
+
+
+    def missingItemTypesThatDirectlyPreventTheseItemTypesBeingProduced(self,itemTypes):
+        recipesWeWouldWantToRun =  self.recipesThatCANTExecuteThatCanProduceItemsFrom(itemTypes)
+        listOFListOfItemTypes = [r.missingItemTypesThatPreventExecutionAgainstInventory(self.inventory) for r in recipesWeWouldWantToRun]
+        itemTypes = [item for sublist in listOFListOfItemTypes for item in sublist]
+        return set(itemTypes)
+        
+
+
     def itemTypesThatAreMisingAndPreventRecipesFormExecuting(self):
-        listOFListOfItemTypes = [r.consumes.itemTypesNotSubsumedBy(self.inventory) for r in self.recipes]
+        listOFListOfItemTypes = [r.missingItemTypesThatPreventExecutionAgainstInventory(self.inventory) for r in self.recipes]
         itemTypes = [item for sublist in listOFListOfItemTypes for item in sublist]
         return set(itemTypes)
 
@@ -218,15 +235,11 @@ class Factory:
         paths = FulfillmentPath.fulfillmentPaths(order,self)
         if len(paths)==0 :
             return None
-        best=paths[0]
-        for p in paths[1:]:
-            (db,fb)=self.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(best)
-            (d,f)=self.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(p)
-            if(db.numberOfItems() < d.numberOfItems()) :
-                best=p
-            elif db.numberOfItems() == d.numberOfItems() and  fb.sizeOfInventory()< f.sizeOfInventory():
-                best=p
-        return best
+        equalBest =  FulfillmentPath.bestFulfillmentPathsByOverAllRating(paths,self)
+        if len(equalBest) >1:
+            print("hi chad 1 len(equalBest)=" + str(len(equalBest)))
+        return equalBest[0]
+       
 
 class Order:
     def __init__(self,required,allowPartialFulfillment):
@@ -234,7 +247,7 @@ class Order:
         self.allowPartialFulfillment = allowPartialFulfillment
 
     @classmethod
-    def fromString(cls, orderString):
+    def fromString(cls, orderString):          
         amountXType=orderString.split()
         assert len(amountXType) == 2
         amount= int(amountXType[0].lower().replace("x",""))
@@ -264,24 +277,36 @@ class Order:
             # so attempting to run a reciept that might help another recipy run is a good thing
             # all recipes that can run but dont help an un runnable recipe dont help
         deliveryActions =  [DeliverAction(itemType) for itemType in self.required.itemTypesPresent() if factory.hasItemTypeInInventory(itemType)]
-
-        recipesThatWillMakeSomethingNeeded = factory.recipesThatCanExecuteThatCanProduceItemsFrom(self.required.itemTypesPresent())
-        recipesThatWillHelpARecipeRun  = factory.recipesThatCanExecuteThatCanProduceItemsFrom(factory.itemTypesThatAreMisingAndPreventRecipesFormExecuting())
-
-      
         if len(deliveryActions)!=0:
-            actions=[deliveryActions[0]]
-        elif len(recipesThatWillMakeSomethingNeeded)  !=0:
-            actions=   [ExecuteRecipeAction(r) for r in recipesThatWillMakeSomethingNeeded]
-        elif len(recipesThatWillHelpARecipeRun)  !=0:
-            actions=   [ExecuteRecipeAction(r) for r in recipesThatWillHelpARecipeRun]
-        else:
-            actions=list()
+            return [deliveryActions[0]]
 
-        for action in actions:
-            assert FulfillmentPath([action]).canBeSuccessfullyAppliedTo(factory)
-        return actions
+        # recipesThatWillMakeSomethingNeeded = factory.recipesThatCanExecuteThatCanProduceItemsFrom(self.required.itemTypesPresent())
+        # if len(recipesThatWillMakeSomethingNeeded)  !=0:
+        #    return [[ExecuteRecipeAction(r) for r in recipesThatWillMakeSomethingNeeded][0]]
 
+        usefulItemTypesToCreate =   set(self.required.itemTypesPresent())
+
+        # just return one to get a result
+        while True:
+            recipesThatWillMakeSomethingNeeded=factory.recipesThatCanExecuteThatCanProduceItemsFrom(usefulItemTypesToCreate)
+            if len(recipesThatWillMakeSomethingNeeded)  !=0:
+                return [[ExecuteRecipeAction(r) for r in recipesThatWillMakeSomethingNeeded][0]]
+            missingItemTypesForRecipes = factory.missingItemTypesThatDirectlyPreventTheseItemTypesBeingProduced(usefulItemTypesToCreate)
+            if missingItemTypesForRecipes.issubset(usefulItemTypesToCreate) :
+                return list()
+            usefulItemTypesToCreate= usefulItemTypesToCreate.union(missingItemTypesForRecipes)
+        #
+        # recipesThatWillHelpARecipeRun  = factory.recipesThatCanExecuteThatCanProduceItemsFrom(factory.itemTypesThatAreMisingAndPreventRecipesFormExecuting())
+        #
+        # if len(recipesThatWillHelpARecipeRun)  !=0:
+        #     return [ExecuteRecipeAction(r) for r in recipesThatWillHelpARecipeRun]
+        #
+
+
+        # for action in actions:
+        #     assert FulfillmentPath([action]).canBeSuccessfullyAppliedTo(factory)
+        # return actions
+        return  list()
 
 class FulfillmentPath:
     def __init__(self,actionsInOrderOfExecuiton):
@@ -306,9 +331,31 @@ class FulfillmentPath:
                 if newPath.satisfiesOrder(order):
                     if(not newPath.equivalentForIntialStateIsAlreadyPresentIn(fulfillmentPaths,factory))  :  #an optimization only add non equivalent paths
                         fulfillmentPaths.append(newPath)
-        return fulfillmentPaths
+        return cls.bestFulfillmentPathsByOverAllRating(fulfillmentPaths,factory)
+
+    @classmethod
+    def bestFulfillmentPathsByDeliveredRating(cls,paths):
+        if len(paths)==0:
+            return paths
+        maxRating = max([p.deliveredRating() for p in paths])
+        return [p for p in paths if p.deliveredRating()==maxRating]
+
+    @classmethod
+    def bestFulfillmentPathsByOverAllRating(cls,paths,initialFactory):
+        if len(paths)<=1:
+            return paths
+        maxRating = max([p.overAllRatingConsideringFinalInventory(initialFactory) for p in paths])
+        if abs(maxRating-0)<1e-5 :
+            return paths
+        return [p for p in paths if (abs(p.overAllRatingConsideringFinalInventory(initialFactory)-maxRating)/maxRating) < 1e-5]
 
 
+    def deliveredRating(self):
+        return self.delivers().numberOfItems()
+
+    def  overAllRatingConsideringFinalInventory(self,initialFactory):
+        (d,f)=initialFactory.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(self)
+        return d.numberOfItems() + f.sizeOfInventory()/(10*initialFactory.sizeOfInventory() ) #*2 incase we create more
 
     def __eq__(self, other):
         if id(self)==id(other):
@@ -565,7 +612,7 @@ def  testPartialSolution():
     print("testPartialSolution succeeded")
 
 def tests():
-    testPartialSolution()
+    testTwoRecipes()
     #---
     testJustFindIt()
     testOneRecipe()
@@ -586,7 +633,7 @@ def run(args=None):
         orders = [Order.fromStrings(args.orders)]
     factory=Factory(inventory=inventory,recipes=recipes )
     paths = factory.bestFulfillmentPathForEachOrderInTurn(orders)
-    deliveries = [factory.excutePath(p) for p in paths]
+    deliveries = [factory.excutePathReturningDeliveryOrNone(p) for p in paths]
     for p in paths:
         p.printExecution()
 
