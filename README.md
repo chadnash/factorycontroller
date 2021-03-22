@@ -26,5 +26,5 @@ To Execute:
 * the default run as speced is one of the tests it may be run explicitly
     *  **python src/factorycontroller/factoryContoller.py **
 *the example json files are in src/factorycontroller  to used these files and to run the default run use
-    *   **python src/factorycontroller/factoryContoller.py --inv src/factorycontroller/inv.json --recipes src/factorycontroller/recipes.json --orders "3x electric_engine" "5x electric_circuit"  "3x electric_engine"**
+    *  **python src/factorycontroller/factoryContoller.py --inv src/factorycontroller/inv.json --recipes src/factorycontroller/recipes.json --orders "3x electric_engine" "5x electric_circuit"  "3x electric_engine"**
 
