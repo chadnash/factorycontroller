@@ -235,7 +235,10 @@ class Order:
     def allFirstActions(self,factory):  # factory allows us to limit the possible first actions with out just tryng them ll
         deliveryActions =  [DeliverAction(itemType) for itemType in self.required.itemTypesPresent() if factory.hasItemTypeInInventory(itemType)]
         executeRecipeActions =  [ExecuteRecipeAction(r) for r in factory.recipesThatCanBeExecuted()]
-        return deliveryActions +   executeRecipeActions
+        actions =  deliveryActions +   executeRecipeActions
+        for action in actions:
+            assert FulfillmentPath([action]).canBeSuccessfullyAppliedTo(factory)
+        return actions
 
 
 class FulfillmentPath:
@@ -256,7 +259,7 @@ class FulfillmentPath:
                     fulfillmentPaths.append(newPath)
 
             for subPath in subPaths:
-                newPath = subPath.withExtension(action)
+                newPath = subPath.withPriorAction(action)
                 if(not newPath.equivalentForIntialStateIsAlreadyPresentIn(fulfillmentPaths,factory))  :  #an optimization only add non equivalent paths
                     fulfillmentPaths.append(newPath)
         return fulfillmentPaths
@@ -274,13 +277,16 @@ class FulfillmentPath:
     def __hash__(self):
         return hash(vars(self).items())
 
+    def withPriorAction(self,action):
+        return FulfillmentPath( [action] +self.actionsInOrderOfExecuiton )
+    
     def withExtension(self,action):
         return FulfillmentPath(self.actionsInOrderOfExecuiton + [action])
 
     def equivalentForIntialStateIsAlreadyPresentIn(self,fulfillmentPaths,initalFactory):
         for p in fulfillmentPaths:
             if self.isEquivalentForIntialState(p,initalFactory) :
-                return True
+                return True   c
         return False
 
     def isEquivalentForIntialState(self,other,initalFactory):
@@ -443,7 +449,7 @@ def  testOneRecipe():
     oneB = ItemTypeQuantities({"b":1} )
     recipe = Recipe("bToA","bToA",ItemTypeQuantities({"b":1} ),ItemTypeQuantities({"a":1} ),10)
     factory=Factory(inventory=oneB,recipes=[recipe])
-
+               
     paths = factory.bestFulfillmentPathForEachOrderInTurn([Order(oneA,False)])
     assert paths[0] is not None
     (d,f)= factory.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(paths[0])
