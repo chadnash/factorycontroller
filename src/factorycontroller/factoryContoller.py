@@ -2,7 +2,10 @@
 # This alogotithm copes with the possibliity of more than one one to construct the build of an item
 #i do make too many factories but that was the cost of trying all paths to fulfill  orders
 # it is a bit of a mish mash of mutable and immutable - but the method names are always indicative
-# orders may be muych more complicted than jus an order for a single thing and they may be fully or partially delivered
+# orders may be muych more complicted than just an order for a single thing and they may be fully or partially delivered
+#orders may optionally be place back in to the inventory this is the default  (but this is strange)
+
+# the example run onlt made 4 
 
 #  I have have considered and rejected some  optimization to sometimes use muteable factories to stop factories being copied too often
 # I have used deep copy just to make sure some my imutables are imutable and implement deepcopy for imutables to return self as an optimization
@@ -215,10 +218,10 @@ class Factory:
     def __hash__(self):
         return hash(vars(self).items())
 
-    def excutePathReturningDeliveryOrNone(self,fulfillmentPath):  # a hack to make factories  change
+    def excutePathReturningDeliveryOrNone_DONTUSEIT(self,fulfillmentPath):  # a hack to make factories  change
         delivery = ItemTypeQuantities()
         (delivery,newFactory) = fulfillmentPath.deliveryAndFactoryAfterFulfilmentOrNoneNone(self)
-        self.inventory=newFactory.inventory.deepCopy
+        self.inventory=copy.deepcopy(newFactory.inventory)
         return delivery
 
     def bestFulfillmentPathForEachOrderInTurn(self,orders):
@@ -242,17 +245,20 @@ class Factory:
        
 
 class Order:
-    def __init__(self,required,allowPartialFulfillment):
+    def __init__(self,required,allowPartialFulfillment,returnToInventory=False):
         self.required = required
         self.allowPartialFulfillment = allowPartialFulfillment
+        self.returnToInventory=returnToInventory
 
     @classmethod
     def fromString(cls, orderString):          
         amountXType=orderString.split()
-        assert len(amountXType) == 2
+        assert len(amountXType) == 2  or (len(amountXType) == 3 and (amountXType[2] == "RTN" or amountXType[2]=="RMV"))
         amount= int(amountXType[0].lower().replace("x",""))
         typeName=   amountXType[1]
-        return cls(ItemTypeQuantities({typeName:amount}),True)
+        returnToInv = not (len(amountXType) == 3  and amountXType[2] == "RMV")
+
+        return cls(ItemTypeQuantities({typeName:amount}),True, returnToInv)
 
     @classmethod
     def fromStrings(cls,orderStrings):
@@ -268,6 +274,12 @@ class Order:
 
     def __hash__(self):
         return hash(vars(self).items())
+
+    def isOrderStatifiedByDelivery(self,delivery):
+        return self.missingAfterDelivery(delivery).numberOfItems()==0
+
+    def missingAfterDelivery(self,delivery):
+        return self.required.minus(delivery)
 
     def allFirstActions(self,factory):  # factory allows us to limit the possible first actions with out just tryng them ll
         # always deliver if possible
@@ -290,7 +302,7 @@ class Order:
         while True:
             recipesThatWillMakeSomethingNeeded=factory.recipesThatCanExecuteThatCanProduceItemsFrom(usefulItemTypesToCreate)
             if len(recipesThatWillMakeSomethingNeeded)  !=0:
-                return [[ExecuteRecipeAction(r) for r in recipesThatWillMakeSomethingNeeded][0]]
+                return [ExecuteRecipeAction(r) for r in recipesThatWillMakeSomethingNeeded]
             missingItemTypesForRecipes = factory.missingItemTypesThatDirectlyPreventTheseItemTypesBeingProduced(usefulItemTypesToCreate)
             if missingItemTypesForRecipes.issubset(usefulItemTypesToCreate) :
                 return list()
@@ -309,8 +321,9 @@ class Order:
         return  list()
 
 class FulfillmentPath:
-    def __init__(self,actionsInOrderOfExecuiton):
+    def __init__(self,actionsInOrderOfExecuiton,order):
         self.actionsInOrderOfExecuiton = actionsInOrderOfExecuiton
+        self.order=order
 
     @classmethod
     def fulfillmentPaths(cls,order,factory):
@@ -321,13 +334,13 @@ class FulfillmentPath:
         for action in firstActions:
             subPaths = cls.fulfillmentPaths(action.orderAfterAction(order),action.factoryAfterAction(factory))
             if len(subPaths)==0 and action.delivers.numberOfItems() > 0:
-                newPath = FulfillmentPath([action])
+                newPath = FulfillmentPath([action],order)
                 if newPath.satisfiesOrder(order):
                     if(not newPath.equivalentForIntialStateIsAlreadyPresentIn(fulfillmentPaths,factory))  :  #an optimization only add non equivalent paths
                         fulfillmentPaths.append(newPath)
 
             for subPath in subPaths:
-                newPath = subPath.withPriorAction(action)
+                newPath = subPath.withPriorAction(action,order)
                 if newPath.satisfiesOrder(order):
                     if(not newPath.equivalentForIntialStateIsAlreadyPresentIn(fulfillmentPaths,factory))  :  #an optimization only add non equivalent paths
                         fulfillmentPaths.append(newPath)
@@ -371,11 +384,11 @@ class FulfillmentPath:
     def __str__(self):
         return "FP("+ ",".join([str(a) for a in self.actionsInOrderOfExecuiton])+")"
 
-    def withPriorAction(self,action):
-        return FulfillmentPath( [action] +self.actionsInOrderOfExecuiton )
+    def withPriorAction(self,action,order):
+        return FulfillmentPath( [action] +self.actionsInOrderOfExecuiton,order )
 
-    def withExtension(self,action):
-        return FulfillmentPath(self.actionsInOrderOfExecuiton + [action])
+    def withExtension(self,action,order):
+        return FulfillmentPath(self.actionsInOrderOfExecuiton + [action],order)
 
     def equivalentForIntialStateIsAlreadyPresentIn(self,fulfillmentPaths,initalFactory):
         for p in fulfillmentPaths:
@@ -400,7 +413,9 @@ class FulfillmentPath:
             if(newDelivery is None):
                 return (None,None)
             delivery=delivery.plus(newDelivery)
-        assert delivery==self.delivers() # just a check
+        assert delivery==self.delivers() # just a check ]
+        if self.order.returnToInventory:
+            f= Factory(f.recipes,f.inventory.plus(delivery))
         return (delivery,f)
 
     def delivers(self):
@@ -416,6 +431,11 @@ class FulfillmentPath:
             return True
         else:
             return False
+
+    def printExecution(self):
+        for i in range(0,len(self.actionsInOrderOfExecuiton)):
+            print(self.actionsInOrderOfExecuiton[i].executionPrintString(self.actionsInOrderOfExecuiton[0:i]))
+
 
 class Action:
 
@@ -433,6 +453,7 @@ class Action:
 
 class DeliverAction(Action):
     def __init__(self,itemTypeToDeliver):
+        self.itemTypeToDeliver=itemTypeToDeliver
         self.delivers = ItemTypeQuantities({itemTypeToDeliver:1})
 
     def __str__(self):
@@ -443,11 +464,18 @@ class DeliverAction(Action):
         return (self.delivers , newFactory)
 
     def orderAfterAction(self,order):
-        return Order(order.required.minus(ItemTypeQuantities(self.delivers)), order.allowPartialFulfillment)
+        return Order(order.required.minus(ItemTypeQuantities(self.delivers)), order.allowPartialFulfillment,False)
 
     def factoryAfterAction(self,factory):
         newInventory=factory.inventory.minus(self.delivers)
         return Factory(factory.recipes, newInventory)
+
+    def timeToExecute(self):
+        return 0
+
+    def executionPrintString(self,priorActions):
+        elapsedTime = sum([a.timeToExecute() for a in priorActions ],0)
+        return "Delivered a " + self.itemTypeToDeliver.name + " after " + str(elapsedTime) + "s"
 
 
 class ExecuteRecipeAction(Action):
@@ -458,17 +486,23 @@ class ExecuteRecipeAction(Action):
     def __str__(self):
         return "RA("+ str(self.recipeToExecute)+")"
 
+    def timeToExecute(self):
+        return self.recipeToExecute.elapsedSecondsToExecute
+
     def deliveryAndFactoryAfterAction(self,factory) :
         newInventory=factory.inventory.minus(self.recipeToExecute.consumes).plus(self.recipeToExecute.produces)
         newFactory =  Factory(factory.recipes, newInventory)
         return (ItemTypeQuantities() , newFactory)
 
     def orderAfterAction(self,order):
-        return order
+        return Order(order.required,order.allowPartialFulfillment,False)
 
     def factoryAfterAction(self,factory):
         (d,f)=self.deliveryAndFactoryAfterAction(factory)
         return f
+
+    def executionPrintString(self,priorActions):
+        return "  executing recipe " + self.recipeToExecute.name + " takes " + str(self.timeToExecute())+ "s building " +  ",".join([str(self.recipeToExecute.produces.quantityOfItemType(itemType))+" X "+ itemType.name for itemType in self.recipeToExecute.produces.itemTypesPresent()])
 
 def jsonObjFromString(jsonString):
     return  json.loads(jsonString)
@@ -612,7 +646,7 @@ def  testPartialSolution():
     print("testPartialSolution succeeded")
 
 def tests():
-    testTwoRecipes()
+    testDefault()
     #---
     testJustFindIt()
     testOneRecipe()
@@ -633,10 +667,35 @@ def run(args=None):
         orders = [Order.fromStrings(args.orders)]
     factory=Factory(inventory=inventory,recipes=recipes )
     paths = factory.bestFulfillmentPathForEachOrderInTurn(orders)
-    deliveries = [factory.excutePathReturningDeliveryOrNone(p) for p in paths]
+    #deliveries = [factory.excutePathReturningDeliveryOrNone(p) if p is not None else None for p in paths ]
     for p in paths:
-        p.printExecution()
+        if p is not None:
+            print("")
+            p.printExecution()
+            print("")
 
+    inventoryAndDeliveryAfterEachOrder = list()
+    f = factory
+    for p in paths :
+        if p is not None:
+            (d,f) = p.deliveryAndFactoryAfterFulfilmentOrNoneNone(f)
+            inventoryAndDeliveryAfterEachOrder.append((d,f.inventory) )
+        else:
+            inventoryAndDeliveryAfterEachOrder.append(None)
+
+    matchedOrders =  [(orders[i],inventoryAndDeliveryAfterEachOrder[i][0],inventoryAndDeliveryAfterEachOrder[i][1]) for i in range(0,len(orders)) ]
+    print(" inv before orders: "+ str(factory.inventory) )
+    for (o,d,inv) in matchedOrders:
+        if d is  None:
+            print("Order Unfulfilled  " + str(o.required) )
+        elif o.isOrderStatifiedByDelivery(d):
+            print("Satisfied order " + str(o.required) )
+            print(" inv after order: "+ str(inv) )
+        else:
+            print("Order partially filled  " ) 
+            print("  received:" + str(d))
+            print("  missing: " + str(o.missingAfterDelivery(d)) )
+            print(" inv after order: "+ str(inv) )
 
 
 if __name__ == "__main__":
@@ -645,7 +704,7 @@ if __name__ == "__main__":
     parser.add_argument('--test', action='store_true', help='run tests')
     parser.add_argument('--inv', nargs=2 ,default=None, help='inventory json file path')
     parser.add_argument('--recipes', nargs=2 ,default=None, help='recipies json file path')
-    parser.add_argument('--orders', nargs='*' , default=None,help='orders note orders must be quoted')
+    parser.add_argument('--orders', nargs='*' , default=None,help='orders note orders must be quoted of form <n>x <itemname> [RTN|RMV]. Note RTN means return order to inventory RMV means remove from inventory, RTN is the default')
     args = parser.parse_args()
     if args.test:
         tests()
