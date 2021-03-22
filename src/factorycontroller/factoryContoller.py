@@ -16,7 +16,7 @@ class Recipe:
         self.consumes  =copy.deepcopy(consumes)
         self.produces  =copy.deepcopy(produces)
         self.elapsedSecondsToExecute =elapsedSecondsToExecute
-    
+
     @classmethod
     def fromJsonObjAndName(cls,name,jsonObj):
         assert  isinstance(jsonObj,dict)
@@ -31,6 +31,9 @@ class Recipe:
         recipes = [ ]
         return [Recipe.fromJsonObjAndName(key,jsonObj[key]) for key in jsonObj]
 
+    def __str__(self):
+        return "R("+ self.name + " consumes=" + str(self.consumes)+ " produces=" + str(self.produces)+")"
+
     def __eq__(self, other):
         if id(self)==id(other):
             return True
@@ -40,10 +43,13 @@ class Recipe:
             return False
 
     def __hash__(self):
-        return hash(vars(self).items())
+        return hash(self.title) + hash(self.consumes)  +hash(self.produces)  + hash(self.elapsedSecondsToExecute)
 
     def canExecuteWithInventory(self,inventory):
         return inventory.subsumes(self.consumes)
+
+    def producesOneOf(self,itemTypes):
+        return self.produces.hasAnyOf(itemTypes)
 
     def __deepcopy__(self,memo):
         #Recipies are imputable so copy can be itself
@@ -63,11 +69,11 @@ class ItemTypeQuantities:
         for  k in self.itemQuantityHeldByItemType:
             assert self.itemQuantityHeldByItemType[k]>=0
             assert k is not None
-            
+
     @classmethod
     def fromJsonObj(cls,jsonObj):
         return cls.fromQuantityByTypeNameDict(jsonObj)
-        
+
     @classmethod
     def fromQuantityByTypeNameDict(cls,quantityByTypeNameDict):        # Yes I know there may be no value in wrapping strings in itemtypes
         quantByItemType = {}
@@ -75,12 +81,18 @@ class ItemTypeQuantities:
             quantByItemType[ItemType(name)]=quantity
         return cls(quantByItemType)
 
+    def __str__(self):
+        return  ",".join([str(k)+ "->" + str(v)  for (k,v) in self.itemQuantityHeldByItemType.items()])
+
     def numberOfItems(self):
         return sum(self.itemQuantityHeldByItemType.values(),0)
 
     def itemTypesPresent(self):
         return [itemType for itemType in self.itemQuantityHeldByItemType if self.quantityOfItemType(itemType) >0]
-        
+
+    def hasAnyOf(self,itemTypes):
+       return len(set(self.itemTypesPresent()).intersection(itemTypes))!=0
+
     def quantityOfItemType(self,itemType):
         return self.itemQuantityHeldByItemType.get(itemType,0)
 
@@ -100,7 +112,8 @@ class ItemTypeQuantities:
             if self.quantityOfItemType(itemType)  < other.quantityOfItemType(itemType) :
                 return False
         return True
-
+    def itemTypesNotSubsumedBy(self,other):
+        return [itemType for itemType in self.itemTypesPresent() if self.quantityOfItemType(itemType) >  other.quantityOfItemType(itemType)]
 
     def withOneRemoved(self,itemType):
         quantByItemType = copy.deepcopy(self.itemQuantityHeldByItemType )
@@ -132,7 +145,7 @@ class ItemType:
         return self
 
     def __str__(self):
-        return "ItemType("+self.name + ")"
+        return "IT("+self.name + ")"
 
     def __eq__(self, other):
         if id(self)==id(other):
@@ -151,6 +164,9 @@ class Factory:
         self.recipes=copy.deepcopy(recipes)
         self.inventory= copy.deepcopy(inventory)
 
+    def __str__(self):
+        return "F(inventory="+ str(self.inventory) +")"
+
     def deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(self,fulfillmentPath):
         return fulfillmentPath.deliveryAndFactoryAfterFulfilmentOrNoneNone(self)
 
@@ -162,6 +178,14 @@ class Factory:
 
     def recipesThatCanBeExecuted(self):
         return [r for r in self.recipes if r.canExecuteWithInventory(self.inventory)]
+
+    def recipesThatCanExecuteThatCanProduceItemsFrom(self,itemTypes):
+        return [r for r in self.recipes if r.canExecuteWithInventory(self.inventory) and r.producesOneOf(set(itemTypes))]
+
+    def itemTypesThatAreMisingAndPreventRecipesFormExecuting(self):
+        listOFListOfItemTypes = [r.consumes.itemTypesNotSubsumedBy(self.inventory) for r in self.recipes]
+        itemTypes = [item for sublist in listOFListOfItemTypes for item in sublist]
+        return set(itemTypes)
 
     def __eq__(self, other):
         if id(self)==id(other):
@@ -233,9 +257,27 @@ class Order:
         return hash(vars(self).items())
 
     def allFirstActions(self,factory):  # factory allows us to limit the possible first actions with out just tryng them ll
+        # always deliver if possible
+        # run any recipe that mught produce a new thing to deliver
+        # run any recipe that creates items that the invetory does not have that prevets a recipe for runing
+        # so either there is a  recipe that can run that will produce and item or there are items that need to be built
+            # so attempting to run a reciept that might help another recipy run is a good thing
+            # all recipes that can run but dont help an un runnable recipe dont help
         deliveryActions =  [DeliverAction(itemType) for itemType in self.required.itemTypesPresent() if factory.hasItemTypeInInventory(itemType)]
-        executeRecipeActions =  [ExecuteRecipeAction(r) for r in factory.recipesThatCanBeExecuted()]
-        actions =  deliveryActions +   executeRecipeActions
+
+        recipesThatWillMakeSomethingNeeded = factory.recipesThatCanExecuteThatCanProduceItemsFrom(self.required.itemTypesPresent())
+        recipesThatWillHelpARecipeRun  = factory.recipesThatCanExecuteThatCanProduceItemsFrom(factory.itemTypesThatAreMisingAndPreventRecipesFormExecuting())
+
+      
+        if len(deliveryActions)!=0:
+            actions=[deliveryActions[0]]
+        elif len(recipesThatWillMakeSomethingNeeded)  !=0:
+            actions=   [ExecuteRecipeAction(r) for r in recipesThatWillMakeSomethingNeeded]
+        elif len(recipesThatWillHelpARecipeRun)  !=0:
+            actions=   [ExecuteRecipeAction(r) for r in recipesThatWillHelpARecipeRun]
+        else:
+            actions=list()
+
         for action in actions:
             assert FulfillmentPath([action]).canBeSuccessfullyAppliedTo(factory)
         return actions
@@ -253,15 +295,17 @@ class FulfillmentPath:
         firstActions = order.allFirstActions(factory)  # maybe we could  avoid deliver actions
         for action in firstActions:
             subPaths = cls.fulfillmentPaths(action.orderAfterAction(order),action.factoryAfterAction(factory))
-            if len(subPaths)==0:
+            if len(subPaths)==0 and action.delivers.numberOfItems() > 0:
                 newPath = FulfillmentPath([action])
-                if(not newPath.equivalentForIntialStateIsAlreadyPresentIn(fulfillmentPaths,factory))  :  #an optimization only add non equivalent paths
-                    fulfillmentPaths.append(newPath)
+                if newPath.satisfiesOrder(order):
+                    if(not newPath.equivalentForIntialStateIsAlreadyPresentIn(fulfillmentPaths,factory))  :  #an optimization only add non equivalent paths
+                        fulfillmentPaths.append(newPath)
 
             for subPath in subPaths:
                 newPath = subPath.withPriorAction(action)
-                if(not newPath.equivalentForIntialStateIsAlreadyPresentIn(fulfillmentPaths,factory))  :  #an optimization only add non equivalent paths
-                    fulfillmentPaths.append(newPath)
+                if newPath.satisfiesOrder(order):
+                    if(not newPath.equivalentForIntialStateIsAlreadyPresentIn(fulfillmentPaths,factory))  :  #an optimization only add non equivalent paths
+                        fulfillmentPaths.append(newPath)
         return fulfillmentPaths
 
 
@@ -277,22 +321,25 @@ class FulfillmentPath:
     def __hash__(self):
         return hash(vars(self).items())
 
+    def __str__(self):
+        return "FP("+ ",".join([str(a) for a in self.actionsInOrderOfExecuiton])+")"
+
     def withPriorAction(self,action):
         return FulfillmentPath( [action] +self.actionsInOrderOfExecuiton )
-    
+
     def withExtension(self,action):
         return FulfillmentPath(self.actionsInOrderOfExecuiton + [action])
 
     def equivalentForIntialStateIsAlreadyPresentIn(self,fulfillmentPaths,initalFactory):
         for p in fulfillmentPaths:
             if self.isEquivalentForIntialState(p,initalFactory) :
-                return True   c
+                return True
         return False
 
     def isEquivalentForIntialState(self,other,initalFactory):
         assert self.canBeSuccessfullyAppliedTo(initalFactory)
         assert other.canBeSuccessfullyAppliedTo(initalFactory)
-        self.deliveryAndFactoryAfterFulfilmentOrNoneNone(initalFactory) == other.deliveryAndFactoryAfterFulfilmentOrNoneNone(initalFactory)
+        return self.deliveryAndFactoryAfterFulfilmentOrNoneNone(initalFactory) == other.deliveryAndFactoryAfterFulfilmentOrNoneNone(initalFactory)
 
     def canBeSuccessfullyAppliedTo(self,factory):
         (d,f) = self.deliveryAndFactoryAfterFulfilmentOrNoneNone(factory)
@@ -315,7 +362,13 @@ class FulfillmentPath:
             sum = sum.plus(a.delivers)
         return sum
 
-
+    def satisfiesOrder(self,order):
+        if(self.delivers().numberOfItems()==0):
+            return False
+        elif self.delivers() == order.required or order.allowPartialFulfillment:
+            return True
+        else:
+            return False
 
 class Action:
 
@@ -335,6 +388,9 @@ class DeliverAction(Action):
     def __init__(self,itemTypeToDeliver):
         self.delivers = ItemTypeQuantities({itemTypeToDeliver:1})
 
+    def __str__(self):
+        return "DA("+ str(self.delivers)+")"
+
     def deliveryAndFactoryAfterAction(self,factory) :
         newFactory =  Factory(factory.recipes, factory.inventory.minus(self.delivers))
         return (self.delivers , newFactory)
@@ -351,6 +407,9 @@ class ExecuteRecipeAction(Action):
     def __init__(self,recipeToExecute):
         self.recipeToExecute = recipeToExecute
         self.delivers=ItemTypeQuantities()
+
+    def __str__(self):
+        return "RA("+ str(self.recipeToExecute)+")"
 
     def deliveryAndFactoryAfterAction(self,factory) :
         newInventory=factory.inventory.minus(self.recipeToExecute.consumes).plus(self.recipeToExecute.produces)
@@ -449,7 +508,7 @@ def  testOneRecipe():
     oneB = ItemTypeQuantities({"b":1} )
     recipe = Recipe("bToA","bToA",ItemTypeQuantities({"b":1} ),ItemTypeQuantities({"a":1} ),10)
     factory=Factory(inventory=oneB,recipes=[recipe])
-               
+
     paths = factory.bestFulfillmentPathForEachOrderInTurn([Order(oneA,False)])
     assert paths[0] is not None
     (d,f)= factory.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(paths[0])
@@ -457,11 +516,62 @@ def  testOneRecipe():
     assert f.sizeOfInventory() ==0
     print("testOneRecipe succeeded")
 
-    
+def  testTwoRecipes():
+    oneA = ItemTypeQuantities({"a":1} )
+    oneB = ItemTypeQuantities({"b":1} )
+    oneC = ItemTypeQuantities({"c":1} )
+    recipe1 = Recipe("bToA","bToA",ItemTypeQuantities({"b":1} ),ItemTypeQuantities({"a":1} ),10)
+    recipe2 = Recipe("cToB","cToB",ItemTypeQuantities({"c":1} ),ItemTypeQuantities({"b":1} ),10)
+    factory=Factory(inventory=oneC,recipes=[recipe1,recipe2])
+
+    paths = FulfillmentPath.fulfillmentPaths(Order(oneA,False),factory)
+    assert len(paths) ==1
+    (d,f)= factory.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(paths[0])
+    assert d == oneA
+    assert f.sizeOfInventory() ==0
+    print("testTwoRecipes succeeded")
+
+def  testCantFindASolution():
+    oneA = ItemTypeQuantities({"a":1} )
+    oneB = ItemTypeQuantities({"b":1} )
+    oneC = ItemTypeQuantities({"c":1} )
+    #recipe1 = Recipe("bToA","bToA",ItemTypeQuantities({"b":1} ),ItemTypeQuantities({"a":1} ),10)
+    recipe2 = Recipe("cToB","cToB",ItemTypeQuantities({"c":1} ),ItemTypeQuantities({"b":1} ),10)
+    factory=Factory(inventory=oneC,recipes=[recipe2])
+
+    paths = FulfillmentPath.fulfillmentPaths(Order(oneA,False),factory)
+    assert len(paths) ==0
+
+    print("testCantFindASolution succeeded")
+
+def  testPartialSolution():
+    oneA = ItemTypeQuantities({"a":1} )
+    oneB = ItemTypeQuantities({"b":1} )
+    oneC = ItemTypeQuantities({"c":1} )
+    AAB =  ItemTypeQuantities({"a":2, "b":1} )
+    ABB =  ItemTypeQuantities({"a":1, "b":2} )
+
+    recipe1 = Recipe("bToA","bToA",ItemTypeQuantities({"b":1} ),ItemTypeQuantities({"a":1} ),10)
+    recipe2 = Recipe("cToB","cToB",ItemTypeQuantities({"c":1} ),ItemTypeQuantities({"b":1} ),10)
+
+    factory=Factory(inventory=AAB,recipes=[recipe1])
+    order =  Order(ABB,True)
+
+    paths = FulfillmentPath.fulfillmentPaths(order,factory)
+    assert len(paths) ==1
+    (d0,f0) = paths[0].deliveryAndFactoryAfterFulfilmentOrNoneNone(factory)
+    assert d0.numberOfItems() == 2
+    assert f0.sizeOfInventory() == 1
+    print("testPartialSolution succeeded")
+
 def tests():
-    testOneRecipe()
+    testPartialSolution()
+    #---
     testJustFindIt()
     testOneRecipe()
+    testTwoRecipes()
+    testCantFindASolution()
+    testPartialSolution()
     testDefault()
 
 def run(args=None):
@@ -473,7 +583,7 @@ def run(args=None):
     if  args is not None and args.recipes is not None:
         recipes = Recipe.recipesfromJsonObj(jsonObjFromFilePath(args.recipes))
     if  args is not None and args.orders is not None:
-        orders = [Order.fromStrings(args.orders)] 
+        orders = [Order.fromStrings(args.orders)]
     factory=Factory(inventory=inventory,recipes=recipes )
     paths = factory.bestFulfillmentPathForEachOrderInTurn(orders)
     deliveries = [factory.excutePath(p) for p in paths]
@@ -494,4 +604,3 @@ if __name__ == "__main__":
         tests()
     else:
         run(args)
-          
