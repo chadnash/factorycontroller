@@ -1,8 +1,8 @@
 
 # This alogotithm copes with the possibliity of more than one one to construct the build of an item
 #i do make too many factories but that was the cost of trying all paths to fulfill  orders
-# it is a bit of a mish mash of mutable and immutable - but the method names are always indicative 
-
+# it is a bit of a mish mash of mutable and immutable - but the method names are always indicative
+# orders may be muych more complicted than jus an order for a single thing and they may be fully or partially delivered
 
 #  I have have considered and rejected some  optimization to sometimes use muteable factories to stop factories being copied too often
 # I have used deep copy just to make sure some my imutables are imutable and implement deepcopy for imutables to return self as an optimization
@@ -25,23 +25,20 @@ class Recipe:
                ItemTypeQuantities.fromQuantityByTypeNameDict(jsonObj["produces"]),
                jsonObj["time"])
 
-    def __deepcopy__(self,memo):
-        #Recipies are imputable so copy can be itself
-        return self
-
-class  Recipes:
-    def __init__(self,recipies):
-        self.recipies=recipies
-
     @classmethod
-    def fromJsonObj(cls,jsonObj):
+    def recipesfromJsonObj(cls,jsonObj):
         assert  isinstance(jsonObj,dict)
         recipes = [ ]
-        return cls([Recipe.fromJsonObjAndName(key,jsonObj[key]) for key in jsonObj])
+        return [Recipe.fromJsonObjAndName(key,jsonObj[key]) for key in jsonObj]
+
+
+    def canExecuteWithInventory(self,inventory):
+        return inventory.subsumes(self.consumes)
 
     def __deepcopy__(self,memo):
         #Recipies are imputable so copy can be itself
         return self
+
 
 class ItemTypeQuantities:
     def __init__(self, quantByItems = None):
@@ -72,11 +69,19 @@ class ItemTypeQuantities:
     def quantityOfItemType(self,itemType):
         return self.itemQuantityHeldByItemTyped.get(itemType,0)
 
+    def subsumes(self,other):
+        for itemType in other.itemTypesPresent:
+            if self.quantityOfItemType(itemType)  < other.quantityOfItemType(itemType) :
+                return False
+        return True
+
+
     def withOneRemoved(self,itemType):
         quantByItemType = copy.deepcopy(self.itemQuantityHeldByItemType )
         assert quantByItemType.get(itemType,None) is not None
         quantByItemType[itemType]= quantByItemType[itemType] -1
         return ItemTypeQuantities(quantByItemType)
+
 
     def plus(self,other):
         keys = set()
@@ -118,6 +123,13 @@ class Factory:
     def sizeOfInventory(self):
         return self.inventory.numberOFItems()
 
+    def  hasItemTypeInInventory(self, itemType):
+        return self.inventory.quantityOfItemType(itemType)>0
+
+    def recipesThatCanBeExecuted(self):
+        [r for r in self.recipes if r.canExecuteWithInventory(self.inventory)]
+
+
     def excutePathReturningDeliveryOrNone(self,fulfillmentPath):  # a hack to make factories  change
         delivery = ItemTypeQuantities()
         (delivery,newFactory) = fulfillmentPath.deliveryAndFactoryAfterFulfilmentOrNoneNone(self)
@@ -140,7 +152,9 @@ class Factory:
         for p in paths.tail:
             (db,fb)=self.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(best)
             (d,f)=self.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(p)
-            if fb.sizeOfInventory()< f.sizeOfInventory():
+            if(db.numberOfItems() < d.numberOfItems()) :
+                best=p
+            elif db.numberOfItems() == d.numberOfItems() and  fb.sizeOfInventory()< f.sizeOfInventory():
                 best=p
         return best
 
@@ -161,7 +175,11 @@ class Order:
     def fromStrings(cls,orderStrings):
         return [cls.fromString(s) for s in orderStrings ]
 
-
+    def allFirstActions(self,factory):  # factory allows us to limit the possible first actions with out just tryng them ll
+        actions = list()
+        actions.append([DeliverAction(itemType) for itemType in self.required.itemTypesPresent if factory.hasItemTypeInInventory(itemType)] )
+        actions.append([ExecuteRecipeAction(r) for r in factory.recipesThatCanBeExecuted()])
+        return actions
 
 
 class FulfillmentPath:
@@ -289,7 +307,7 @@ def defaultRecipies():
 "electric_engine": 1 }
 } }
     """
-    return  Recipes.fromJsonObj(jsonObjFromString(jsonString))
+    return  Recipe.recipesfromJsonObj(jsonObjFromString(jsonString))
 
 def defaultOrders():
     return Order.fromStrings(["3x electric_engine","5x electric_circuit", "3x electric_engine"])
@@ -307,7 +325,7 @@ def run(args=None):
     if  args is not None and args.inv is not None:
         inventory = ItemTypeQuantities.fromJsonObj(jsonObjFromFilePath(args.inv))
     if  args is not None and args.recipes is not None:
-        recipes = Recipes.fromJsonObj(jsonObjFromFilePath(args.recipes))
+        recipes = Recipe.recipesfromJsonObj(jsonObjFromFilePath(args.recipes))
     if  args is not None and args.orders is not None:
         orders = [Order.fromStrings(args.orders)] 
     factory=Factory(inventory=inventory,recipes=recipes )
