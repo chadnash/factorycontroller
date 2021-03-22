@@ -5,7 +5,7 @@ yes it is one file - sorry
 the output format could be improved
 copes with many ways of building things and finds best in terms of recipe execution time
  
-this agrees with the given answer on the example case wi=making 4 electric engins in total 
+this agrees with the given answer on the example case making 4 electric engines in total 
 the timings might be diffent as I find other solutions
 this copes with orders 
 * that must be completely fulfilled or canceled 
