@@ -425,6 +425,7 @@ def defaultOrders():
 
 def testDefault():
     run()
+    print("testDefault succeeded")
 
 def testJustFindIt():
     oneA = ItemTypeQuantities({"a":1} )
@@ -435,10 +436,26 @@ def testJustFindIt():
     (d,f)= factory.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(paths[0])
     assert d == oneA
     assert f.sizeOfInventory() ==0
+    print("testJustFindIt succeeded")
+
+def  testOneRecipe():
+    oneA = ItemTypeQuantities({"a":1} )
+    oneB = ItemTypeQuantities({"b":1} )
+    recipe = Recipe("bToA","bToA",ItemTypeQuantities({"b":1} ),ItemTypeQuantities({"a":1} ),10)
+    factory=Factory(inventory=oneB,recipes=[recipe])
+
+    paths = factory.bestFulfillmentPathForEachOrderInTurn([Order(oneA,False)])
+    assert paths[0] is not None
+    (d,f)= factory.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(paths[0])
+    assert d == oneA
+    assert f.sizeOfInventory() ==0
+    print("testOneRecipe succeeded")
 
     
 def tests():
+    testOneRecipe()
     testJustFindIt()
+    testOneRecipe()
     testDefault()
 
 def run(args=None):
