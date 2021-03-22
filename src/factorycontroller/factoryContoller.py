@@ -5,6 +5,7 @@
 # orders may be muych more complicted than just an order for a single thing and they may be fully or partially delivered
 # orders may optionally be place back in to the inventory this is the default  (but this is strange)
 # orders can require the constuction of new items ie not taken from the inventory - opten requed whne items are returned to the inventory
+# added  an optimization to get itms in an order one at a time
 
 # the doc is inconsistant the example in the ouytput only made 4 electric engines - the earlier doc says it should make 5
 
@@ -102,6 +103,13 @@ class ItemTypeQuantities:
 
     def hasAnyOf(self,itemTypes):
        return len(set(self.itemTypesPresent()).intersection(itemTypes))!=0
+
+    def allSingleItems(self):
+        all =list()
+        for itemType in self.itemTypesPresent():
+            for i in range(0,self.quantityOfItemType(itemType)):
+                all.append(ItemTypeQuantities({itemType.name:1}))
+        return all
 
     def quantityOfItemType(self,itemType):
         return self.itemQuantityHeldByItemType.get(itemType,0)
@@ -238,8 +246,8 @@ class Factory:
             bestFulfillmentPathForEachOrderInTurn.append(best)
         return  bestFulfillmentPathForEachOrderInTurn
 
-    def bestFulfillmentPathForOrderOrNone(self,order):
-        paths = FulfillmentPath.fulfillmentPaths(order,self)
+    def bestFulfillmentPathForOrderOrNone(self,order):     
+        paths = FulfillmentPath.fulfillmentPathsOneItemAtATime(order,self)     # fulfillmentPaths fulfillmentPathsOneItemAtATime
         if len(paths)==0 :
             return None
         equalBest =  FulfillmentPath.bestFulfillmentPathsByTimeToExecute(paths)
@@ -344,10 +352,32 @@ class FulfillmentPath:
         self.order=order
 
     @classmethod
+    def fulfillmentPathsOneItemAtATime(cls,order,initialFactory):
+        # we should really do this for the same item types
+
+        factory =  initialFactory
+        if(order.mustBeNew):
+            factory = Factory(initialFactory.recipes,initialFactory.inventory.withNoItemTypesIn(order.required.itemTypesPresent()))
+        orders = [Order(singleItem,order.allowPartialFulfillment,False,False) for singleItem in order.required.allSingleItems()]
+        f = factory
+        fullPath =  FulfillmentPath(list(),order)
+        for o in orders:
+            paths = cls.fulfillmentPaths(o,f)
+            if len(paths) !=0:
+                path = paths[0]
+                (d,f) = path.deliveryAndFactoryAfterFulfilmentOrNoneNone(f)
+                fullPath =  FulfillmentPath(fullPath.actionsInOrderOfExecuiton + path.actionsInOrderOfExecuiton,fullPath.order)
+        if len(fullPath.actionsInOrderOfExecuiton)==0 :
+            return list()
+        else:
+            return [fullPath]
+
+    @classmethod
     def fulfillmentPaths(cls,order,initialFactory):
-        FulfillmentPath.countFFP=FulfillmentPath.countFFP+1
-        if( FulfillmentPath.countFFP % 1000 == 0):
-            print("hi chad 2" + str(FulfillmentPath.countFFP))
+        # FulfillmentPath.countFFP=FulfillmentPath.countFFP+1
+        # if( FulfillmentPath.countFFP % 1000 == 0):
+        #     print("hi chad 2" + str(FulfillmentPath.countFFP))
+
         factory =  initialFactory
 
         if(order.mustBeNew):
