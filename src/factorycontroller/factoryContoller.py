@@ -3,9 +3,10 @@
 #i do make too many factories but that was the cost of trying all paths to fulfill  orders
 # it is a bit of a mish mash of mutable and immutable - but the method names are always indicative
 # orders may be muych more complicted than just an order for a single thing and they may be fully or partially delivered
-#orders may optionally be place back in to the inventory this is the default  (but this is strange)
+# orders may optionally be place back in to the inventory this is the default  (but this is strange)
+# orders can require the constuction of new items ie not taken from the inventory - opten requed whne items are returned to the inventory
 
-# the example run onlt made 4 
+# the doc is inconsistant the example in the ouytput only made 4 electric engines - the earlier doc says it should make 5
 
 #  I have have considered and rejected some  optimization to sometimes use muteable factories to stop factories being copied too often
 # I have used deep copy just to make sure some my imutables are imutable and implement deepcopy for imutables to return self as an optimization
@@ -86,6 +87,9 @@ class ItemTypeQuantities:
         for (name,quantity) in  quantityByTypeNameDict.items():
             quantByItemType[ItemType(name)]=quantity
         return cls(quantByItemType)
+
+    def withNoItemTypesIn(self,itemTypes):
+        return ItemTypeQuantities({k:v for (k,v) in self.itemQuantityHeldByItemType.items() if k not in itemTypes   } )
 
     def __str__(self):
         return  ",".join([str(k)+ "->" + str(v)  for (k,v) in self.itemQuantityHeldByItemType.items()])
@@ -238,27 +242,29 @@ class Factory:
         paths = FulfillmentPath.fulfillmentPaths(order,self)
         if len(paths)==0 :
             return None
-        equalBest =  FulfillmentPath.bestFulfillmentPathsByOverAllRating(paths,self)
+        equalBest =  FulfillmentPath.bestFulfillmentPathsByTimeToExecute(paths)
         if len(equalBest) >1:
             print("hi chad 1 len(equalBest)=" + str(len(equalBest)))
         return equalBest[0]
        
 
 class Order:
-    def __init__(self,required,allowPartialFulfillment,returnToInventory=False):
+    def __init__(self,required,allowPartialFulfillment,returnToInventory,mustBeNew):
         self.required = required
         self.allowPartialFulfillment = allowPartialFulfillment
         self.returnToInventory=returnToInventory
+        self.mustBeNew=mustBeNew
 
     @classmethod
     def fromString(cls, orderString):          
         amountXType=orderString.split()
-        assert len(amountXType) == 2  or (len(amountXType) == 3 and (amountXType[2] == "RTN" or amountXType[2]=="RMV"))
+        assert len(amountXType) == 2  or (len(amountXType) >= 3 and (amountXType[2] == "RTN" or amountXType[2]=="RMV" or amountXType[2] == "NEW" or amountXType[2]=="OLD"))
         amount= int(amountXType[0].lower().replace("x",""))
         typeName=   amountXType[1]
-        returnToInv = not (len(amountXType) == 3  and amountXType[2] == "RMV")
+        returnToInv = not (len(amountXType) >= 3  and (amountXType[2] == "RMV" or amountXType[3] == "RMV"))
+        mustBeNew = not (len(amountXType) >= 3  and (amountXType[2] == "OLD" or amountXType[3] == "OLD"))
 
-        return cls(ItemTypeQuantities({typeName:amount}),True, returnToInv)
+        return cls(ItemTypeQuantities({typeName:amount}),True, returnToInv,mustBeNew)
 
     @classmethod
     def fromStrings(cls,orderStrings):
@@ -297,17 +303,28 @@ class Order:
         #    return [[ExecuteRecipeAction(r) for r in recipesThatWillMakeSomethingNeeded][0]]
 
         usefulItemTypesToCreate =   set(self.required.itemTypesPresent())
-
-        # just return one to get a result
+        # V3  get all that could help
         while True:
-            recipesThatWillMakeSomethingNeeded=factory.recipesThatCanExecuteThatCanProduceItemsFrom(usefulItemTypesToCreate)
-            if len(recipesThatWillMakeSomethingNeeded)  !=0:
-                return [ExecuteRecipeAction(r) for r in recipesThatWillMakeSomethingNeeded]
             missingItemTypesForRecipes = factory.missingItemTypesThatDirectlyPreventTheseItemTypesBeingProduced(usefulItemTypesToCreate)
             if missingItemTypesForRecipes.issubset(usefulItemTypesToCreate) :
-                return list()
+                recipesThatWillMakeSomethingNeeded=factory.recipesThatCanExecuteThatCanProduceItemsFrom(usefulItemTypesToCreate)
+                if len(recipesThatWillMakeSomethingNeeded)  !=0:
+                    return [ExecuteRecipeAction(r) for r in recipesThatWillMakeSomethingNeeded]
+                else:
+                    return list()
             usefulItemTypesToCreate= usefulItemTypesToCreate.union(missingItemTypesForRecipes)
-        #
+
+        # V2 return the ones that will happen with less steps first
+        # while True:
+        #     recipesThatWillMakeSomethingNeeded=factory.recipesThatCanExecuteThatCanProduceItemsFrom(usefulItemTypesToCreate)
+        #     if len(recipesThatWillMakeSomethingNeeded)  !=0:
+        #         return [ExecuteRecipeAction(r) for r in recipesThatWillMakeSomethingNeeded]
+        #     missingItemTypesForRecipes = factory.missingItemTypesThatDirectlyPreventTheseItemTypesBeingProduced(usefulItemTypesToCreate)
+        #     if missingItemTypesForRecipes.issubset(usefulItemTypesToCreate) :
+        #         return list()
+        #     usefulItemTypesToCreate= usefulItemTypesToCreate.union(missingItemTypesForRecipes)
+
+        # V1
         # recipesThatWillHelpARecipeRun  = factory.recipesThatCanExecuteThatCanProduceItemsFrom(factory.itemTypesThatAreMisingAndPreventRecipesFormExecuting())
         #
         # if len(recipesThatWillHelpARecipeRun)  !=0:
@@ -321,12 +338,21 @@ class Order:
         return  list()
 
 class FulfillmentPath:
+    countFFP =0
     def __init__(self,actionsInOrderOfExecuiton,order):
         self.actionsInOrderOfExecuiton = actionsInOrderOfExecuiton
         self.order=order
 
     @classmethod
-    def fulfillmentPaths(cls,order,factory):
+    def fulfillmentPaths(cls,order,initialFactory):
+        FulfillmentPath.countFFP=FulfillmentPath.countFFP+1
+        if( FulfillmentPath.countFFP % 1000 == 0):
+            print("hi chad 2" + str(FulfillmentPath.countFFP))
+        factory =  initialFactory
+
+        if(order.mustBeNew):
+            factory = Factory(initialFactory.recipes,initialFactory.inventory.withNoItemTypesIn(order.required.itemTypesPresent()))
+
         fulfillmentPaths=list()
         if order.required.numberOfItems()==0:
             return fulfillmentPaths
@@ -344,7 +370,7 @@ class FulfillmentPath:
                 if newPath.satisfiesOrder(order):
                     if(not newPath.equivalentForIntialStateIsAlreadyPresentIn(fulfillmentPaths,factory))  :  #an optimization only add non equivalent paths
                         fulfillmentPaths.append(newPath)
-        return cls.bestFulfillmentPathsByOverAllRating(fulfillmentPaths,factory)
+        return cls.bestFulfillmentPathsByTimeToExecute(fulfillmentPaths)
 
     @classmethod
     def bestFulfillmentPathsByDeliveredRating(cls,paths):
@@ -352,6 +378,14 @@ class FulfillmentPath:
             return paths
         maxRating = max([p.deliveredRating() for p in paths])
         return [p for p in paths if p.deliveredRating()==maxRating]
+
+    @classmethod
+    def bestFulfillmentPathsByTimeToExecute(cls,paths):
+        if len(paths)<=1:
+            return paths
+        minRating = min([p.timeToExecute() for p in paths])
+
+        return [p for p in paths if (abs(p.timeToExecute()-minRating)) < 1e-5]
 
     @classmethod
     def bestFulfillmentPathsByOverAllRating(cls,paths,initialFactory):
@@ -365,6 +399,10 @@ class FulfillmentPath:
 
     def deliveredRating(self):
         return self.delivers().numberOfItems()
+
+
+    def timeToExecute(self):
+        return sum([a.timeToExecute() for a in self.actionsInOrderOfExecuiton ],0)
 
     def  overAllRatingConsideringFinalInventory(self,initialFactory):
         (d,f)=initialFactory.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(self)
@@ -399,7 +437,9 @@ class FulfillmentPath:
     def isEquivalentForIntialState(self,other,initalFactory):
         assert self.canBeSuccessfullyAppliedTo(initalFactory)
         assert other.canBeSuccessfullyAppliedTo(initalFactory)
-        return self.deliveryAndFactoryAfterFulfilmentOrNoneNone(initalFactory) == other.deliveryAndFactoryAfterFulfilmentOrNoneNone(initalFactory)
+        outcomeTheSame =  self.deliveryAndFactoryAfterFulfilmentOrNoneNone(initalFactory) == other.deliveryAndFactoryAfterFulfilmentOrNoneNone(initalFactory)
+        executionTimeTheSame = abs(self.timeToExecute()- other.timeToExecute()) < 1e-5
+        return outcomeTheSame and executionTimeTheSame
 
     def canBeSuccessfullyAppliedTo(self,factory):
         (d,f) = self.deliveryAndFactoryAfterFulfilmentOrNoneNone(factory)
@@ -464,7 +504,7 @@ class DeliverAction(Action):
         return (self.delivers , newFactory)
 
     def orderAfterAction(self,order):
-        return Order(order.required.minus(ItemTypeQuantities(self.delivers)), order.allowPartialFulfillment,False)
+        return Order(order.required.minus(ItemTypeQuantities(self.delivers)), order.allowPartialFulfillment,False,False)
 
     def factoryAfterAction(self,factory):
         newInventory=factory.inventory.minus(self.delivers)
@@ -495,7 +535,7 @@ class ExecuteRecipeAction(Action):
         return (ItemTypeQuantities() , newFactory)
 
     def orderAfterAction(self,order):
-        return Order(order.required,order.allowPartialFulfillment,False)
+        return Order(order.required,order.allowPartialFulfillment,False,False)
 
     def factoryAfterAction(self,factory):
         (d,f)=self.deliveryAndFactoryAfterAction(factory)
@@ -509,7 +549,14 @@ def jsonObjFromString(jsonString):
 
 
 def jsonObjFromFilePath(filePath):
-    with open(filePath, 'r') as json_file:
+    import os
+    fp=filePath
+    if not os.path.exists(fp):
+        fp =os.path.join(os.getcwd(),fp)
+
+    assert os.path.exists(fp)
+   
+    with open(fp, 'r') as json_file:
         return  json.load(json_file)
 
 
@@ -577,7 +624,7 @@ def testJustFindIt():
     oneA = ItemTypeQuantities({"a":1} )
     factory=Factory(inventory=oneA,recipes=list())
 
-    paths = factory.bestFulfillmentPathForEachOrderInTurn([Order(oneA,False)])
+    paths = factory.bestFulfillmentPathForEachOrderInTurn([Order(oneA,False,False,False)])
     assert paths[0] is not None
     (d,f)= factory.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(paths[0])
     assert d == oneA
@@ -590,7 +637,7 @@ def  testOneRecipe():
     recipe = Recipe("bToA","bToA",ItemTypeQuantities({"b":1} ),ItemTypeQuantities({"a":1} ),10)
     factory=Factory(inventory=oneB,recipes=[recipe])
 
-    paths = factory.bestFulfillmentPathForEachOrderInTurn([Order(oneA,False)])
+    paths = factory.bestFulfillmentPathForEachOrderInTurn([Order(oneA,False,False,False)])
     assert paths[0] is not None
     (d,f)= factory.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(paths[0])
     assert d == oneA
@@ -605,7 +652,7 @@ def  testTwoRecipes():
     recipe2 = Recipe("cToB","cToB",ItemTypeQuantities({"c":1} ),ItemTypeQuantities({"b":1} ),10)
     factory=Factory(inventory=oneC,recipes=[recipe1,recipe2])
 
-    paths = FulfillmentPath.fulfillmentPaths(Order(oneA,False),factory)
+    paths = FulfillmentPath.fulfillmentPaths(Order(oneA,False,False,False),factory)
     assert len(paths) ==1
     (d,f)= factory.deliveryAndFactoryAfterFulfillmentOrNoneNoneIfCant(paths[0])
     assert d == oneA
@@ -620,7 +667,7 @@ def  testCantFindASolution():
     recipe2 = Recipe("cToB","cToB",ItemTypeQuantities({"c":1} ),ItemTypeQuantities({"b":1} ),10)
     factory=Factory(inventory=oneC,recipes=[recipe2])
 
-    paths = FulfillmentPath.fulfillmentPaths(Order(oneA,False),factory)
+    paths = FulfillmentPath.fulfillmentPaths(Order(oneA,False,False,False),factory)
     assert len(paths) ==0
 
     print("testCantFindASolution succeeded")
@@ -636,7 +683,7 @@ def  testPartialSolution():
     recipe2 = Recipe("cToB","cToB",ItemTypeQuantities({"c":1} ),ItemTypeQuantities({"b":1} ),10)
 
     factory=Factory(inventory=AAB,recipes=[recipe1])
-    order =  Order(ABB,True)
+    order =  Order(ABB,True,False,False)
 
     paths = FulfillmentPath.fulfillmentPaths(order,factory)
     assert len(paths) ==1
@@ -645,14 +692,51 @@ def  testPartialSolution():
     assert f0.sizeOfInventory() == 1
     print("testPartialSolution succeeded")
 
+def alternativeSolutionsTest():
+    A = ItemTypeQuantities({"a":1} )
+    B = ItemTypeQuantities({"b":1} )
+    C = ItemTypeQuantities({"c":1} )
+    AAB =  ItemTypeQuantities({"a":2, "b":1} )
+    ABB =  ItemTypeQuantities({"a":1, "b":2} )
+    CC =  ItemTypeQuantities({"c":2} )
+    AA =  ItemTypeQuantities({"a":2} )
+
+    bToA10 = Recipe("bToA","bToA",B ,A ,10)
+    ctoA10 = Recipe("cToA","cToA",C,A,10)
+    ctoB10 = Recipe("cToB","cToB",C ,B,10)
+    
+    bToA2 = Recipe("bToA","bToA",B ,A ,2)
+    ctoA2 = Recipe("cToA","cToA",C,A,2)
+    ctoB2 = Recipe("cToB","cToB",C ,B,2)
+
+    factory1=Factory(inventory=C,recipes=[bToA10,ctoA10,ctoB10])
+    factory2=Factory(inventory=C,recipes=[bToA2,ctoA10,ctoB2])
+    order =  Order(A,True,False,False)
+
+
+    paths1 = FulfillmentPath.fulfillmentPaths(order,factory1)
+    paths2 = FulfillmentPath.fulfillmentPaths(order,factory2)
+
+    assert len(paths1)==1
+    assert len(paths1[0].actionsInOrderOfExecuiton)==2
+
+    assert len(paths2)==1
+    assert len(paths2[0].actionsInOrderOfExecuiton)==3
+
+
+    print("alternativeSolutionsTest succeeded")
+
+
+
 def tests():
-    testDefault()
+    alternativeSolutionsTest()
     #---
     testJustFindIt()
     testOneRecipe()
     testTwoRecipes()
     testCantFindASolution()
     testPartialSolution()
+    alternativeSolutionsTest()
     testDefault()
 
 def run(args=None):
@@ -660,11 +744,11 @@ def run(args=None):
     recipes =  defaultRecipies()
     orders =  defaultOrders()
     if  args is not None and args.inv is not None:
-        inventory = ItemTypeQuantities.fromJsonObj(jsonObjFromFilePath(args.inv))
+        inventory = ItemTypeQuantities.fromJsonObj(jsonObjFromFilePath(args.inv[0]))
     if  args is not None and args.recipes is not None:
-        recipes = Recipe.recipesfromJsonObj(jsonObjFromFilePath(args.recipes))
+        recipes = Recipe.recipesfromJsonObj(jsonObjFromFilePath(args.recipes[0]))
     if  args is not None and args.orders is not None:
-        orders = [Order.fromStrings(args.orders)]
+        orders = Order.fromStrings(args.orders)
     factory=Factory(inventory=inventory,recipes=recipes )
     paths = factory.bestFulfillmentPathForEachOrderInTurn(orders)
     #deliveries = [factory.excutePathReturningDeliveryOrNone(p) if p is not None else None for p in paths ]
@@ -700,11 +784,12 @@ def run(args=None):
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--test', action='store_true', help='run tests')
-    parser.add_argument('--inv', nargs=2 ,default=None, help='inventory json file path')
-    parser.add_argument('--recipes', nargs=2 ,default=None, help='recipies json file path')
-    parser.add_argument('--orders', nargs='*' , default=None,help='orders note orders must be quoted of form <n>x <itemname> [RTN|RMV]. Note RTN means return order to inventory RMV means remove from inventory, RTN is the default')
+    parser.add_argument('--inv', nargs=1 ,default=None, help='inventory json file path')
+    parser.add_argument('--recipes', nargs=1 ,default=None, help='recipes json file path')
+    parser.add_argument('--orders', nargs='*' , default=None,help='orders note orders must be quoted of form <n>x <itemname> [RTN|RMV] [OLD|NEW]. Note RTN means return order to inventory RMV means remove from inventory, RTN is the default. Note Orders can require that the must be NEW made  this is the default')
     args = parser.parse_args()
     if args.test:
         tests()
